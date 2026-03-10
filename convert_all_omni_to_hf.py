@@ -86,39 +86,71 @@ logger = logging.getLogger(__name__)
 
 MODEL_REGISTRY: Dict[str, Dict[str, str]] = {
     # ── v1 series ─────────────────────────────────────────────────────────────
+    "omniASR_CTC_300M": {
+        "fairseq2_card": "omniASR_CTC_300M",
+        "hf_repo_name":  "omniASR-CTC-300M",
+        "model_type":    "ctc",
+    },
+        "omniASR_CTC_300M_v2": {
+        "fairseq2_card": "omniASR_CTC_300M_v2",
+        "hf_repo_name":  "omniASR-CTC-300M-v2",
+        "model_type":    "ctc",
+    },
+
     "omniASR_W2V_300M": {
         "fairseq2_card": "omniASR_W2V_300M",
         "hf_repo_name":  "omniASR-W2V-300M",
+        "model_type":    "ssl",
     },
-    "omniASR_W2V_1B": {
+    "omniASR_CTC_1B": {
+        "fairseq2_card": "omniASR_CTC_1B",
+        "hf_repo_name":  "omniASR-CTC-1B",
+        "model_type":    "ctc",
+    },
+        "omniASR_CTC_1B_v2": {
+        "fairseq2_card": "omniASR_CTC_1B_v2",
+        "hf_repo_name":  "omniASR-CTC-1B-v2",
+        "model_type":    "ctc",
+    },
+        "omniASR_W2V_1B": {
         "fairseq2_card": "omniASR_W2V_1B",
         "hf_repo_name":  "omniASR-W2V-1B",
+        "model_type":    "ssl",
+    },
+    "omniASR_CTC_3B": {
+        "fairseq2_card": "omniASR_CTC_3B",
+        "hf_repo_name":  "omniASR-CTC-3B",
+        "model_type":    "ctc",
+    },
+
+    "omniASR_CTC_3B_v2": {
+        "fairseq2_card": "omniASR_CTC_3B_v2",
+        "hf_repo_name":  "omniASR-CTC-3B-v2",
+        "model_type":    "ctc",
     },
     "omniASR_W2V_3B": {
         "fairseq2_card": "omniASR_W2V_3B",
         "hf_repo_name":  "omniASR-W2V-3B",
+        "model_type":    "ssl",
+    },
+    "omniASR_CTC_7B": {
+        "fairseq2_card": "omniASR_CTC_7B",
+        "hf_repo_name":  "omniASR-CTC-7B",
+        "model_type":    "ctc",
+    },
+
+    "omniASR_CTC_7B_v2": {
+        "fairseq2_card": "omniASR_CTC_7B_v2",
+        "hf_repo_name":  "omniASR-CTC-7B-v2",
+        "model_type":    "ctc",
     },
     "omniASR_W2V_7B": {
         "fairseq2_card": "omniASR_W2V_7B",
         "hf_repo_name":  "omniASR-W2V-7B",
+        "model_type":    "ssl",
     },
-    # ── v2 series ─────────────────────────────────────────────────────────────
-    "omniASR_CTC_300M_v2": {
-        "fairseq2_card": "omniASR_CTC_300M_v2",
-        "hf_repo_name":  "omniASR-CTC-300M-v2",
-    },
-    "omniASR_CTC_1B_v2": {
-        "fairseq2_card": "omniASR_CTC_1B_v2",
-        "hf_repo_name":  "omniASR-CTC-1B-v2",
-    },
-    "omniASR_CTC_3B_v2": {
-        "fairseq2_card": "omniASR_CTC_3B_v2",
-        "hf_repo_name":  "omniASR-CTC-3B-v2",
-    },
-    "omniASR_CTC_7B_v2": {
-        "fairseq2_card": "omniASR_CTC_7B_v2",
-        "hf_repo_name":  "omniASR-CTC-7B-v2",
-    },
+
+
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -422,6 +454,136 @@ def convert_fairseq2_to_hf(
     return model
 
 
+def detect_arch_ssl(fs2_sd: Dict[str, Tensor]) -> Dict:
+    """Auto-detect architecture hyperparameters for a fairseq2 SSL Wav2Vec2 model.
+
+    Same as detect_arch() but does not look for a CTC projection head
+    (final_proj), since SSL pre-training models have no CTC output layer.
+
+    Returns:
+        Dict with keys: n_layers, hidden_size, intermediate_size,
+        num_attention_heads.
+    """
+    layer_indices = {
+        int(k.split(".")[2])
+        for k in fs2_sd
+        if k.startswith("encoder.layers.")
+    }
+    n_layers = len(layer_indices)
+    hidden_size = fs2_sd["encoder.layer_norm.weight"].shape[0]
+    intermediate_size = fs2_sd["encoder.layers.0.ffn.inner_proj.weight"].shape[0]
+    num_attention_heads = hidden_size // 64
+
+    arch = dict(
+        n_layers=n_layers,
+        hidden_size=hidden_size,
+        intermediate_size=intermediate_size,
+        num_attention_heads=num_attention_heads,
+    )
+    logger.info(
+        "Detected SSL architecture: layers=%d  hidden=%d  intermediate=%d  heads=%d",
+        n_layers, hidden_size, intermediate_size, num_attention_heads,
+    )
+    return arch
+
+
+def build_hf_config_ssl(
+    n_layers: int,
+    hidden_size: int,
+    num_attention_heads: int,
+    intermediate_size: int,
+):
+    """Build a Wav2Vec2Config for a SSL (feature-extractor) model.
+
+    Identical to build_hf_config() except there is no vocab_size / CTC head.
+    The resulting config is used to instantiate Wav2Vec2Model (no lm_head).
+    """
+    from transformers import Wav2Vec2Config
+
+    return Wav2Vec2Config(
+        hidden_size=hidden_size,
+        num_hidden_layers=n_layers,
+        num_attention_heads=num_attention_heads,
+        intermediate_size=intermediate_size,
+        hidden_act="gelu",
+        do_stable_layer_norm=True,
+        feat_extract_norm="layer",
+        conv_dim=(512, 512, 512, 512, 512, 512, 512),
+        conv_stride=(5, 2, 2, 2, 2, 2, 2),
+        conv_kernel=(10, 3, 3, 3, 3, 2, 2),
+        conv_bias=True,
+        num_conv_pos_embeddings=128,
+        num_conv_pos_embedding_groups=16,
+    )
+
+
+def convert_fairseq2_to_hf_ssl(
+    fs2_sd: Dict[str, Tensor],
+    arch: Dict,
+):
+    """Map a fairseq2 SSL Wav2Vec2 state dict into a HuggingFace Wav2Vec2Model.
+
+    Only the encoder weights are transferred.  SSL-specific keys (final_proj,
+    quantizer, project_q, etc.) that have no HF equivalent are silently dropped.
+
+    Returns:
+        Wav2Vec2Model in eval mode with all encoder weights loaded.
+    """
+    from transformers import Wav2Vec2Model
+
+    # Build key mapping (includes final_proj → lm_head entries, but Wav2Vec2Model
+    # has no lm_head so those will land in `unexpected` and be ignored).
+    mapping = build_key_mapping(arch["n_layers"])
+    config  = build_hf_config_ssl(
+        n_layers=arch["n_layers"],
+        hidden_size=arch["hidden_size"],
+        num_attention_heads=arch["num_attention_heads"],
+        intermediate_size=arch["intermediate_size"],
+    )
+
+    hf_sd: Dict[str, Tensor] = {}
+    unmapped: List[str] = []
+
+    for fs2_key, tensor in fs2_sd.items():
+        if fs2_key in mapping:
+            # Wav2Vec2Model state dict has no "wav2vec2." prefix (unlike
+            # Wav2Vec2ForCTC which nests everything under self.wav2vec2).
+            hf_key = mapping[fs2_key].removeprefix("wav2vec2.")
+            hf_sd[hf_key] = tensor.float().clone()
+        else:
+            unmapped.append(fs2_key)
+
+    if unmapped:
+        logger.info(
+            "%d fairseq2 SSL-only keys dropped (no HF encoder equivalent):\n  %s",
+            len(unmapped), "\n  ".join(unmapped),
+        )
+
+    model = Wav2Vec2Model(config)
+    hf_expected = set(model.state_dict().keys())
+
+    # masked_spec_embed has no "wav2vec2." prefix in Wav2Vec2Model
+    masked_key = "masked_spec_embed"
+    if masked_key in hf_expected and masked_key not in hf_sd:
+        hf_sd[masked_key] = torch.zeros(config.hidden_size)
+
+    missing, unexpected = model.load_state_dict(hf_sd, strict=False)
+
+    if missing:
+        logger.warning("HF keys not loaded (missing from fairseq2 mapping): %s", missing)
+    if unexpected:
+        logger.info(
+            "Mapped keys not in Wav2Vec2Model (SSL head weights, expected): %s", unexpected
+        )
+
+    n_mapped   = len(hf_expected) - len(missing)
+    n_total_hf = len(hf_expected)
+    logger.info("Loaded %d / %d HF parameters from fairseq2 SSL checkpoint.", n_mapped, n_total_hf)
+
+    model.eval()
+    return model
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Tokenizer / preprocessor files
 # ──────────────────────────────────────────────────────────────────────────────
@@ -569,11 +731,10 @@ def _ctc_greedy_decode(logits: Tensor, blank_id: int = 0) -> List[int]:
 
 
 def _run_fairseq2_inference(fs2_model, waveform_norm: Tensor) -> Optional[Tensor]:
-    """Forward-pass a normalised waveform through the fairseq2 model.
+    """Forward-pass a normalised waveform through the fairseq2 omnilingual model.
 
-    Tries the most common fairseq2 wav2vec2_asr inference API variants in order.
-    Returns the raw logits tensor of shape (1, time, vocab_size), or None if
-    all API attempts fail (triggers a warning in the caller).
+    Uses the BatchLayout API that omnilingual's ASRInferencePipeline uses
+    internally for Wav2Vec2AsrModel (CTC) inference.
 
     Args:
         fs2_model:      Loaded fairseq2 model (already in eval mode).
@@ -582,37 +743,162 @@ def _run_fairseq2_inference(fs2_model, waveform_norm: Tensor) -> Optional[Tensor
     Returns:
         Logits tensor (1, T_out, vocab_size) or None on failure.
     """
+    from fairseq2.nn.batch_layout import BatchLayout  # type: ignore[import]
+
     seqs     = waveform_norm.unsqueeze(0)          # (1, T)
     seq_lens = torch.tensor([waveform_norm.shape[0]])
 
-    # Attempt 1: (seqs, seq_lens) — most common fairseq2 ≥0.3 API
+    batch_layout = BatchLayout(seqs.shape, seq_lens=seq_lens, device=seqs.device)
+
     try:
         with torch.no_grad():
-            output = fs2_model(seqs, seq_lens)
-        return output.logits
-    except (TypeError, AttributeError):
-        pass
+            logits, _bl_out = fs2_model(seqs, batch_layout)
+        return logits  # (1, T_out, vocab_size)
+    except Exception as exc:
+        logger.warning("[parity] fairseq2 inference failed: %s", exc)
+        return None
 
-    # Attempt 2: (seqs, padding_mask=None) — some model variants
+
+def _run_fairseq2_ssl_inference(fs2_model, waveform_norm: Tensor) -> Optional[Tensor]:
+    """Extract encoder hidden states from a fairseq2 SSL Wav2Vec2Model.
+
+    Mirrors the first three steps of Wav2Vec2AsrModel.forward() (feature
+    extraction → feature processing → transformer encoder) but stops before
+    the CTC final_proj, returning the raw encoder output of shape
+    (1, T_out, hidden_size).
+
+    Args:
+        fs2_model:      Loaded fairseq2 SSL model (eval mode).
+        waveform_norm:  Normalised waveform tensor of shape (T,).
+
+    Returns:
+        Encoder hidden states (1, T_out, hidden_size) or None on failure.
+    """
+    from fairseq2.nn.batch_layout import BatchLayout  # type: ignore[import]
+
+    seqs     = waveform_norm.unsqueeze(0)          # (1, T)
+    seq_lens = torch.tensor([waveform_norm.shape[0]])
+    layout   = BatchLayout(seqs.shape, seq_lens=seq_lens, device=seqs.device)
+
     try:
         with torch.no_grad():
-            output = fs2_model(seqs, padding_mask=None)
-        return output.logits
-    except (TypeError, AttributeError):
-        pass
+            # Step 1: CNN feature extractor + layer norm
+            seqs, layout, _ = fs2_model.encoder_frontend.extract_features(seqs, layout)
+            # Step 2: feature projection + positional encoding (no masking at inference)
+            seqs, _ = fs2_model.encoder_frontend.process_features(seqs, layout, None)
+            # Step 3: transformer encoder
+            encoder_out = fs2_model.encoder(seqs, layout)
+        return encoder_out.unsqueeze(0) if encoder_out.dim() == 2 else encoder_out
+    except Exception as exc:
+        logger.warning("[parity-ssl] fairseq2 SSL inference failed: %s", exc)
+        return None
 
-    # Attempt 3: SequenceBatch API (fairseq2 ≥0.4)
+
+def verify_parity_ssl(
+    fs2_model,
+    hf_model,
+    audio_path: str,
+    tag: str,
+) -> bool:
+    """Validate that the converted Wav2Vec2Model produces equivalent encoder outputs.
+
+    Runs the same normalised audio through both models and checks:
+      1. Output shape matches.
+      2. Full numerical closeness (torch.allclose, atol=1e-4).
+      3. First-order statistics (per-dimension mean) match closely.
+      4. Second-order statistics (per-dimension std) match closely.
+
+    Checks 3 and 4 are always reported; they give a useful signal even when
+    minor floating-point drift causes check 2 to fail.
+
+    Args:
+        fs2_model:  Loaded fairseq2 SSL model (eval mode).
+        hf_model:   Converted HuggingFace Wav2Vec2Model (eval mode).
+        audio_path: Path to a 16 kHz WAV file used as the test utterance.
+        tag:        Short model tag for log messages.
+
+    Returns:
+        True if all checks pass, False otherwise.
+    """
     try:
-        from fairseq2.nn.padding import PaddingMask
-        from fairseq2.data import SequenceBatch  # type: ignore[import]
-        batch = SequenceBatch(seqs=seqs, padding_mask=None)
-        with torch.no_grad():
-            output = fs2_model(batch)
-        return output.logits
-    except (ImportError, TypeError, AttributeError):
-        pass
+        logger.info("[%s] SSL parity check: loading audio from %s", tag, audio_path)
+        waveform      = _load_audio_16k(audio_path)
+        waveform_norm = _normalize_waveform(waveform)
 
-    return None  # all attempts failed
+        # ── fairseq2 encoder output ───────────────────────────────────────────
+        fs2_out = _run_fairseq2_ssl_inference(fs2_model, waveform_norm)
+        if fs2_out is None:
+            logger.warning(
+                "[%s] SSL parity check: fairseq2 inference failed — skipping.", tag
+            )
+            return False
+
+        # ── HF encoder output ─────────────────────────────────────────────────
+        with torch.no_grad():
+            hf_out = hf_model(
+                input_values=waveform_norm.unsqueeze(0)
+            ).last_hidden_state  # (1, T_out, hidden_size)
+
+        # ── Check 1: shape ────────────────────────────────────────────────────
+        if fs2_out.shape != hf_out.shape:
+            logger.error(
+                "[%s] SSL PARITY FAIL — shape mismatch: fairseq2=%s  HF=%s",
+                tag, tuple(fs2_out.shape), tuple(hf_out.shape),
+            )
+            return False
+        logger.info("[%s]   embedding shape: %s  ✓", tag, tuple(hf_out.shape))
+
+        # ── Check 2: full numerical closeness ─────────────────────────────────
+        max_diff     = (fs2_out - hf_out).abs().max().item()
+        values_match = torch.allclose(fs2_out, hf_out, atol=1e-4, rtol=1e-3)
+        if values_match:
+            logger.info(
+                "[%s]   embedding values: max_abs_diff=%.2e  ✓", tag, max_diff
+            )
+        else:
+            logger.error(
+                "[%s] SSL PARITY FAIL — embedding mismatch: max_abs_diff=%.2e  "
+                "(tolerance atol=1e-4, rtol=1e-3)",
+                tag, max_diff,
+            )
+
+        # ── Check 3 & 4: first and second order statistics ────────────────────
+        # Computed over the time dimension → shape (hidden_size,)
+        fs2_mean = fs2_out.squeeze(0).mean(dim=0)   # (hidden_size,)
+        hf_mean  = hf_out.squeeze(0).mean(dim=0)
+        fs2_std  = fs2_out.squeeze(0).std(dim=0)
+        hf_std   = hf_out.squeeze(0).std(dim=0)
+
+        mean_max_diff = (fs2_mean - hf_mean).abs().max().item()
+        std_max_diff  = (fs2_std  - hf_std ).abs().max().item()
+        stats_match   = (mean_max_diff < 1e-3) and (std_max_diff < 1e-3)
+
+        logger.info(
+            "[%s]   mean max_abs_diff=%.2e  std max_abs_diff=%.2e  %s",
+            tag, mean_max_diff, std_max_diff,
+            "✓" if stats_match else "FAIL",
+        )
+        if not stats_match:
+            logger.error(
+                "[%s] SSL PARITY FAIL — statistics mismatch "
+                "(mean diff=%.2e, std diff=%.2e)",
+                tag, mean_max_diff, std_max_diff,
+            )
+
+        passed = values_match and stats_match
+        if passed:
+            logger.info("[%s] SSL parity check PASSED.", tag)
+        else:
+            logger.error("[%s] SSL parity check FAILED.", tag)
+        return passed
+
+    except Exception as exc:
+        logger.warning(
+            "[%s] SSL parity check raised an unexpected error (%s) — "
+            "not blocking conversion.",
+            tag, exc,
+        )
+        return False
 
 
 def verify_parity(
@@ -768,6 +1054,193 @@ def verify_parity(
         return False
 
 
+def write_model_card(
+    local_dir: str,
+    tag: str,
+    fairseq2_card: str,
+    hf_repo_id: str,
+    arch: Dict,
+    model_type: str,
+    parity_verified: Optional[bool],
+) -> None:
+    """Write a README.md model card to `local_dir`.
+
+    Args:
+        local_dir:        Local checkpoint directory.
+        tag:              Short model tag (e.g. ``omniASR_CTC_300M``).
+        fairseq2_card:    Original fairseq2 model card name.
+        hf_repo_id:       Full HuggingFace repo ID (``user/repo-name``).
+        arch:             Architecture dict from detect_arch / detect_arch_ssl.
+        model_type:       ``"ctc"`` or ``"ssl"``.
+        parity_verified:  True = passed, False = failed, None = not tested.
+    """
+    is_ctc = model_type == "ctc"
+
+    # ── YAML front-matter ─────────────────────────────────────────────────────
+    if is_ctc:
+        pipeline_tag = "automatic-speech-recognition"
+        extra_tags   = "- automatic-speech-recognition"
+    else:
+        pipeline_tag = "feature-extraction"
+        extra_tags   = "- feature-extraction"
+
+    if parity_verified is True:
+        verified_badge = "✅ Verified"
+        verified_note  = (
+            "Numerical parity against the original fairseq2 checkpoint has been "
+            "confirmed: outputs match to within `atol=1e-4` on a held-out audio sample."
+        )
+    elif parity_verified is False:
+        verified_badge = "⚠️ Verification failed"
+        verified_note  = (
+            "A parity check was run but reported a mismatch. "
+            "Use with caution and open an issue if you observe unexpected behaviour."
+        )
+    else:
+        verified_badge = "—"
+        verified_note  = "No parity check was run during conversion."
+
+
+    size_label = tag.split("_")[-1]  # "300M", "1B", etc.
+
+    if is_ctc:
+        hf_class      = "Wav2Vec2ForCTC"
+        description   = (
+            f"Wav2Vec2 CTC ASR model ({size_label}) converted from the "
+            f"[OmniLingual](https://github.com/Ahmedfull02/omnilingual_asr) "
+            f"fairseq2 checkpoint `{fairseq2_card}`.\n\n"
+            "This model outputs CTC logits over a SentencePiece vocabulary and "
+            "can transcribe speech in multiple languages."
+        )
+        usage_snippet = f"""\
+```python
+from transformers import Wav2Vec2ForCTC, AutoProcessor
+import torch, torchaudio
+
+processor = AutoProcessor.from_pretrained("{hf_repo_id}")
+model     = Wav2Vec2ForCTC.from_pretrained("{hf_repo_id}")
+model.eval()
+
+waveform, sr = torchaudio.load("audio.wav")
+if sr != 16_000:
+    waveform = torchaudio.functional.resample(waveform, sr, 16_000)
+
+inputs = processor(
+    waveform.squeeze().numpy(), sampling_rate=16_000, return_tensors="pt"
+)
+with torch.no_grad():
+    logits = model(**inputs).logits          # (1, T, vocab)
+
+pred_ids   = torch.argmax(logits, dim=-1)
+transcript = processor.decode(pred_ids[0])
+print(transcript)
+```"""
+    else:
+        hf_class      = "Wav2Vec2Model"
+        description   = (
+            f"Wav2Vec2 SSL encoder ({size_label}) converted from the "
+            f"[OmniLingual](https://github.com/Ahmedfull02/omnilingual_asr) "
+            f"fairseq2 checkpoint `{fairseq2_card}`.\n\n"
+            "This is the **pre-trained encoder backbone without a CTC head**, "
+            "suitable for feature extraction, probing, and fine-tuning on "
+            "downstream speech tasks."
+        )
+        usage_snippet = f"""\
+```python
+from transformers import Wav2Vec2Model, Wav2Vec2FeatureExtractor
+import torch, torchaudio
+
+extractor = Wav2Vec2FeatureExtractor.from_pretrained("{hf_repo_id}")
+model     = Wav2Vec2Model.from_pretrained("{hf_repo_id}")
+model.eval()
+
+waveform, sr = torchaudio.load("audio.wav")
+if sr != 16_000:
+    waveform = torchaudio.functional.resample(waveform, sr, 16_000)
+
+inputs = extractor(
+    waveform.squeeze().numpy(), sampling_rate=16_000,
+    return_tensors="pt", padding=True
+)
+with torch.no_grad():
+    embeddings = model(**inputs).last_hidden_state  # (1, T, {arch["hidden_size"]})
+```"""
+
+    # ── Architecture table ────────────────────────────────────────────────────
+    arch_rows = [
+        f"| HF class             | `{hf_class}` |",
+        f"| Encoder layers       | {arch['n_layers']} |",
+        f"| Hidden size          | {arch['hidden_size']} |",
+        f"| Attention heads      | {arch['num_attention_heads']} |",
+        f"| FFN intermediate     | {arch['intermediate_size']} |",
+    ]
+    if is_ctc and "vocab_size" in arch:
+        arch_rows.append(f"| Vocabulary size      | {arch['vocab_size']} |")
+    arch_rows += [
+        f"| Source framework     | fairseq2 |",
+        f"| Source card          | `{fairseq2_card}` |",
+        f"| Parity verification  | {verified_badge} |",
+    ]
+    arch_table = "\n".join(arch_rows)
+
+    readme = f"""\
+---
+library_name: transformers
+tags:
+- speech
+- audio
+- wav2vec2
+{extra_tags}
+pipeline_tag: {pipeline_tag}
+---
+
+# {tag.replace("_", "-")}
+
+{description}
+
+## Model details
+
+| Property             | Value |
+|---|---|
+{arch_table}
+
+## Conversion & verification
+
+Converted from the original fairseq2 checkpoint using the
+[omnilingual_to_hf](https://github.com/Ahmedfull02/omnilingual_to_hf) conversion script.
+
+{verified_note}
+
+## Usage
+
+{usage_snippet}
+"""
+
+    card_path = Path(local_dir) / "README.md"
+    card_path.write_text(readme, encoding="utf-8")
+    logger.info("[%s] Model card written to %s", tag, card_path)
+
+
+def _write_ssl_preprocessor_config(output_dir: str) -> None:
+    """Write a minimal preprocessor_config.json for a SSL Wav2Vec2Model.
+
+    HF pipelines and downstream users expect this file to know the sampling
+    rate and normalisation settings expected by the model.
+    """
+    config = {
+        "feature_extractor_type": "Wav2Vec2FeatureExtractor",
+        "feature_size": 1,
+        "sampling_rate": 16000,
+        "padding_value": 0.0,
+        "do_normalize": True,
+        "return_attention_mask": False,
+    }
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    with open(out / "preprocessor_config.json", "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Per-model conversion pipeline
 # ──────────────────────────────────────────────────────────────────────────────
@@ -781,6 +1254,7 @@ def convert_and_push_one(
     push_to_hub: bool,
     hf_user: Optional[str],
     smoke_test_audio: Optional[str],
+    model_type: str = "ctc",
 ) -> None:
     """Run the full conversion pipeline for a single OmniASR model.
 
@@ -788,10 +1262,11 @@ def convert_and_push_one(
       1. Check whether the model was already converted (idempotent).
       2. Load the fairseq2 model + state dict.
       3. Auto-detect architecture parameters.
-      4. Write tokenizer / preprocessor files.
+      4. Write tokenizer / preprocessor files  (CTC only; skipped for SSL).
       5. Convert weights to HF format.
       6. Parity check — decode test audio with BOTH models and compare outputs.
          (Runs here, before the fairseq2 model is freed, so both are in memory.)
+         (Skipped for SSL models — no CTC decoder.)
       7. Free the fairseq2 model from memory.
       8. Save the HF checkpoint locally.
       9. Push to the HuggingFace Hub (if requested).
@@ -805,6 +1280,8 @@ def convert_and_push_one(
         push_to_hub:      Whether to push the converted checkpoint to HF Hub.
         hf_user:          HuggingFace username / organisation (required for push).
         smoke_test_audio: Optional path to a WAV file for parity validation.
+        model_type:       ``"ctc"`` for CTC ASR models, ``"ssl"`` for SSL
+                          pre-training models (no CTC head, no tokenizer).
     """
     local_dir = str(Path(output_root) / hf_repo_name)
 
@@ -832,21 +1309,49 @@ def convert_and_push_one(
     logger.info("[%s] fairseq2 state dict: %d keys", tag, len(fs2_sd))
 
     # ── Step 2: Auto-detect architecture ─────────────────────────────────────
-    arch = detect_arch(fs2_sd)
+    if model_type == "ssl":
+        arch = detect_arch_ssl(fs2_sd)
+    else:
+        arch = detect_arch(fs2_sd)
 
-    # ── Step 3: Write tokenizer files ────────────────────────────────────────
-    blank_id = build_hf_tokenizer(fairseq2_card, local_dir)
+    # ── Step 3: Write tokenizer files (CTC only) ──────────────────────────────
+    if model_type == "ssl":
+        blank_id = None
+        logger.info("[%s] SSL model — skipping tokenizer (no CTC head).", tag)
+        # Write a minimal preprocessor_config so HF knows the sampling rate.
+        _write_ssl_preprocessor_config(local_dir)
+    else:
+        blank_id = build_hf_tokenizer(fairseq2_card, local_dir)
 
     # ── Step 4: Convert weights ───────────────────────────────────────────────
     logger.info("[%s] Converting weights to HF format …", tag)
-    hf_model = convert_fairseq2_to_hf(fs2_sd, arch, ctc_blank_token_id=blank_id)
+    if model_type == "ssl":
+        hf_model = convert_fairseq2_to_hf_ssl(fs2_sd, arch)
+    else:
+        hf_model = convert_fairseq2_to_hf(fs2_sd, arch, ctc_blank_token_id=blank_id)
 
     # ── Step 5: Parity check ──────────────────────────────────────────────────
     # IMPORTANT: this must run BEFORE del fs2_model so both models are in memory.
     # For large models (3B / 7B) this requires ~2× model RAM simultaneously.
     # Skip by omitting --smoke-test-audio if memory is a constraint.
-    if smoke_test_audio and os.path.exists(smoke_test_audio):
-        verify_parity(
+    # SSL models are skipped — they have no CTC decoder to compare.
+    parity_verified: Optional[bool] = None
+    if model_type == "ssl":
+        if smoke_test_audio and os.path.exists(smoke_test_audio):
+            parity_verified = verify_parity_ssl(
+                fs2_model=fs2_model,
+                hf_model=hf_model,
+                audio_path=smoke_test_audio,
+                tag=tag,
+            )
+        else:
+            logger.info(
+                "[%s] Pass --smoke-test-audio <path.wav> to run SSL embedding "
+                "parity validation.",
+                tag,
+            )
+    elif smoke_test_audio and os.path.exists(smoke_test_audio):
+        parity_verified = verify_parity(
             fs2_model=fs2_model,
             hf_model=hf_model,
             fairseq2_card=fairseq2_card,
@@ -872,6 +1377,18 @@ def convert_and_push_one(
     Path(local_dir).mkdir(parents=True, exist_ok=True)
     hf_model.save_pretrained(local_dir)
     logger.info("[%s] HF checkpoint saved to %s", tag, local_dir)
+
+    # ── Step 7b: Write model card ─────────────────────────────────────────────
+    hf_repo_id = f"{hf_user}/{hf_repo_name}" if hf_user else hf_repo_name
+    write_model_card(
+        local_dir=local_dir,
+        tag=tag,
+        fairseq2_card=fairseq2_card,
+        hf_repo_id=hf_repo_id,
+        arch=arch,
+        model_type=model_type,
+        parity_verified=parity_verified,
+    )
 
     # ── Step 8: Push to HF Hub ────────────────────────────────────────────────
     if push_to_hub:
@@ -1059,6 +1576,7 @@ Examples
                 push_to_hub=args.push_to_hub,
                 hf_user=args.hf_user,
                 smoke_test_audio=args.smoke_test_audio,
+                model_type=entry.get("model_type", "ctc"),
             )
             successes.append(tag)
         except Exception as exc:

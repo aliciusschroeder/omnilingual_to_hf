@@ -9,7 +9,7 @@ optionally push them to the HuggingFace Hub.
 ## What this does
 
 OmniASR is a family of multilingual CTC speech recognition models trained at four scales
-(300M · 1B · 3B · 7B) across two generations (v1 W2V / v2 CTC).  They are distributed
+(300M · 1B · 3B · 7B) across two generations (v1 CTC / v2 CTC).  They are distributed
 through the `fairseq2` model hub as part of the `omnilingual_asr` package.
 
 This repository provides a single self-contained script — `convert_all_omni_to_hf.py` —
@@ -33,10 +33,10 @@ that:
 
 | Tag | fairseq2 card | HF repo |
 |-----|---------------|---------|
-| v1 300M | `omniASR_W2V_300M` | `{user}/omniASR-W2V-300M` |
-| v1 1B   | `omniASR_W2V_1B`   | `{user}/omniASR-W2V-1B`   |
-| v1 3B   | `omniASR_W2V_3B`   | `{user}/omniASR-W2V-3B`   |
-| v1 7B   | `omniASR_W2V_7B`   | `{user}/omniASR-W2V-7B`   |
+| v1 300M | `omniASR_CTC_300M` | `{user}/omniASR-CTC-300M` |
+| v1 1B   | `omniASR_CTC_1B`   | `{user}/omniASR-CTC-1B`   |
+| v1 3B   | `omniASR_CTC_3B`   | `{user}/omniASR-CTC-3B`   |
+| v1 7B   | `omniASR_CTC_7B`   | `{user}/omniASR-CTC-7B`   |
 | v2 300M | `omniASR_CTC_300M_v2` | `{user}/omniASR-CTC-300M-v2` |
 | v2 1B   | `omniASR_CTC_1B_v2`   | `{user}/omniASR-CTC-1B-v2`   |
 | v2 3B   | `omniASR_CTC_3B_v2`   | `{user}/omniASR-CTC-3B-v2`   |
@@ -127,7 +127,7 @@ export FAIRSEQ2_ASSETS_DIR=/path/to/omnilingual/fairseq2_assets
 
 ```bash
 /path/to/omnilingual/bin/python convert_all_omni_to_hf.py \
-    --models omniASR_W2V_300M omniASR_W2V_1B \
+    --models omniASR_CTC_300M omniASR_CTC_1B \
     --hf-user YOUR_HF_USERNAME \
     --push-to-hub
 ```
@@ -243,16 +243,11 @@ an AI coding assistant, during an interactive development session on 2026-03-10.
 The human researcher was not a passive observer — they were the architect and
 decision-maker throughout.  Specifically, the human:
 
-- **Wrote and validated the original single-model conversion script**
-  (`convert_omni_to_hf.py`) that established the entire technical foundation:
-  the fairseq2 → HF key mapping, the CTC blank token convention, the tokenizer
-  config structure, and the smoke-test pattern.  This script was confirmed working
-  before any AI assistance was sought.
 - **Ran `inspect_fairseq2_keys.py`** to map the exact fairseq2 state-dict key
   structure, which is the ground truth all weight mappings are built on.
 - **Provided all domain knowledge** about the models: the eight fairseq2 card names,
   that v1 and v2 share the same feature-extractor topology, and that the standard
-  naming differs between generations (`W2V` vs `CTC`).
+  naming differs between generations (`CTC` vs `CTC`).
 - **Directed every design decision**: self-contained script, auto-detecting
   architecture, idempotent batch runs, and the parity validation feature.
 - **Reviewed and approved** the implementation plan before any code was written.
