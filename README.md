@@ -263,8 +263,7 @@ The AI assistant (Claude Code) contributed:
 - Writing the parity validation system (logit comparison, greedy CTC decode,
   transcript matching).
 - Structuring, commenting, and documenting the code.
-- Proposing and discussing implementation trade-offs (memory management, API
-  fallback strategies for fairseq2 inference, idempotency design).
+
 
 ### In short
 
