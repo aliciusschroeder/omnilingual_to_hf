@@ -840,13 +840,16 @@ def verify_parity_ssl(
                 "[%s] SSL parity check: fairseq2 inference failed — skipping.", tag
             )
             return False
-        fs2_out = fs2_out.cpu()
-
         # ── HF encoder output ─────────────────────────────────────────────────
+        device = next(fs2_model.parameters()).device
+        hf_model.to(device)
         with torch.no_grad():
             hf_out = hf_model(
-                input_values=waveform_norm.unsqueeze(0)
+                input_values=waveform_norm.unsqueeze(0).to(device)
             ).last_hidden_state  # (1, T_out, hidden_size)
+        hf_out  = hf_out.cpu()
+        fs2_out = fs2_out.cpu()
+        hf_model.cpu()  # free GPU memory before save_pretrained
 
         # ── Check 1: shape ────────────────────────────────────────────────────
         if fs2_out.shape != hf_out.shape:
@@ -965,14 +968,17 @@ def verify_parity(
                 tag,
             )
             return False
-        fs2_logits = fs2_logits.cpu()
-
         # ── HF forward pass ───────────────────────────────────────────────────
-        # Feed the already-normalised waveform directly so both models receive
-        # the exact same floating-point input values.
-        hf_input = waveform_norm.unsqueeze(0)  # (1, T)
+        # Run HF on the same device as fairseq2 so both use identical GPU
+        # float32 rounding, then move results to CPU for comparison.
+        device = next(fs2_model.parameters()).device
+        hf_model.to(device)
+        hf_input = waveform_norm.unsqueeze(0).to(device)  # (1, T)
         with torch.no_grad():
             hf_logits = hf_model(input_values=hf_input).logits  # (1, T_out, vocab_size)
+        hf_logits  = hf_logits.cpu()
+        fs2_logits = fs2_logits.cpu()
+        hf_model.cpu()  # free GPU memory before save_pretrained
 
         # ── Check 1: logit shape ──────────────────────────────────────────────
         if fs2_logits.shape != hf_logits.shape:
