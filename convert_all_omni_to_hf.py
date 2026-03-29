@@ -749,10 +749,12 @@ def _run_fairseq2_inference(fs2_model, waveform_norm: Tensor) -> Optional[Tensor
     """
     from fairseq2.nn.batch_layout import BatchLayout  # type: ignore[import]
 
+    dev          = next(fs2_model.parameters()).device
+    waveform_norm = waveform_norm.to(dev)
     seqs     = waveform_norm.unsqueeze(0)          # (1, T)
-    seq_lens = torch.tensor([waveform_norm.shape[0]])
+    seq_lens = torch.tensor([waveform_norm.shape[0]], device=dev)
 
-    batch_layout = BatchLayout(seqs.shape, seq_lens=seq_lens, device=seqs.device)
+    batch_layout = BatchLayout(seqs.shape, seq_lens=seq_lens, device=dev)
 
     try:
         with torch.no_grad():
@@ -780,9 +782,11 @@ def _run_fairseq2_ssl_inference(fs2_model, waveform_norm: Tensor) -> Optional[Te
     """
     from fairseq2.nn.batch_layout import BatchLayout  # type: ignore[import]
 
+    dev          = next(fs2_model.parameters()).device
+    waveform_norm = waveform_norm.to(dev)
     seqs     = waveform_norm.unsqueeze(0)          # (1, T)
-    seq_lens = torch.tensor([waveform_norm.shape[0]])
-    layout   = BatchLayout(seqs.shape, seq_lens=seq_lens, device=seqs.device)
+    seq_lens = torch.tensor([waveform_norm.shape[0]], device=dev)
+    layout   = BatchLayout(seqs.shape, seq_lens=seq_lens, device=dev)
 
     try:
         with torch.no_grad():
@@ -836,6 +840,7 @@ def verify_parity_ssl(
                 "[%s] SSL parity check: fairseq2 inference failed — skipping.", tag
             )
             return False
+        fs2_out = fs2_out.cpu()
 
         # ── HF encoder output ─────────────────────────────────────────────────
         with torch.no_grad():
@@ -960,6 +965,7 @@ def verify_parity(
                 tag,
             )
             return False
+        fs2_logits = fs2_logits.cpu()
 
         # ── HF forward pass ───────────────────────────────────────────────────
         # Feed the already-normalised waveform directly so both models receive
