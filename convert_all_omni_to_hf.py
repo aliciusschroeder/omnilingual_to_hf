@@ -694,7 +694,11 @@ def _load_audio_16k(audio_path: str) -> Tensor:
     waveform, sr = torchaudio.load(audio_path)
     if sr != 16000:
         waveform = torchaudio.transforms.Resample(sr, 16000)(waveform)
-    return waveform.squeeze(0)  # (T,)
+    if waveform.shape[0] > 1:
+        waveform = waveform.mean(dim=0)  # mix to mono
+    else:
+        waveform = waveform.squeeze(0)
+    return waveform  # (T,)
 
 
 def _normalize_waveform(waveform: Tensor) -> Tensor:
@@ -1412,8 +1416,8 @@ def _push_checkpoint(
         hf_repo_name:  HF repository name (without the user/org prefix).
         tag:           Short model tag used in log messages.
     """
-    from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
     from huggingface_hub import HfApi
+    from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 
     if not hf_user:
         logger.error(
